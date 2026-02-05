@@ -1,0 +1,68 @@
+{
+  "project_info": {
+    "project_number": "672595274421",
+    "firebase_url": "https://swiftdine-86be0-default-rtdb.firebaseio.com",
+    "project_id": "swiftdine-86be0",
+    "storage_bucket": "swiftdine-86be0.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:672595274421:android:a129397dd8443d5075acfc",
+        "android_client_info": {
+          "package_name": "com.example.meza_restaurant"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCgx8RsoHvNJTHN5ew7nBk-7-yqNtLkfgI"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:672595274421:android:74c98818a7d10e6375acfc",
+        "android_client_info": {
+          "package_name": "com.example.meza_ride"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCgx8RsoHvNJTHN5ew7nBk-7-yqNtLkfgI"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:672595274421:android:46fefdb7748ee65675acfc",
+        "android_client_info": {
+          "package_name": "com.example.swift_dine"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCgx8RsoHvNJTHN5ew7nBk-7-yqNtLkfgI"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
