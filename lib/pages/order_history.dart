@@ -5,7 +5,12 @@ import 'package:provider/provider.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_theme.dart';
 import '../providers/theme_provider.dart';
+import '../providers/orders_provider.dart';
+import '../models/order.dart' as app_order;
 import '../widgets/responsive_layout.dart';
+
+/// Filter for history (separate from OrderStatus so we can have "All").
+enum HistoryFilter { all, pending, completed, cancelled }
 
 class OrderHistoryScreen extends StatefulWidget {
   const OrderHistoryScreen({super.key});
@@ -16,14 +21,23 @@ class OrderHistoryScreen extends StatefulWidget {
 
 class _OrderHistoryScreenState extends State<OrderHistoryScreen> {
   final TextEditingController _searchController = TextEditingController();
-  final List<OrderStatus> _statusFilters = OrderStatus.values;
+  final List<HistoryFilter> _statusFilters = HistoryFilter.values;
   final List<String> _typeFilters = ['All', 'Dine-in', 'Takeaway', 'Delivery'];
   final List<String> _dateRangeFilters = ['All Time', 'Today', 'Yesterday', 'This Week', 'This Month'];
 
-  OrderStatus _selectedStatus = OrderStatus.all;
+  HistoryFilter _selectedStatus = HistoryFilter.all;
   String _selectedType = 'All';
   String _selectedDateRange = 'All Time';
   DateTimeRange? _customDateRange;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final provider = Provider.of<OrdersProvider>(context, listen: false);
+      if (provider.orders.isEmpty && !provider.loading) provider.loadOrders();
+    });
+  }
 
   @override
   void dispose() {
@@ -53,18 +67,16 @@ class _OrderHistoryScreenState extends State<OrderHistoryScreen> {
               const SizedBox(height: 16),
               ..._statusFilters.map((status) {
                 return ListTile(
-                  leading: _buildStatusDot(status, 20),
+                  leading: _buildHistoryFilterDot(status, 20),
                   title: Text(
-                    _getStatusText(status),
+                    _getHistoryFilterText(status),
                     style: Theme.of(context).textTheme.bodyMedium,
                   ),
                   trailing: _selectedStatus == status
                       ? Icon(Icons.check, color: Theme.of(context).colorScheme.primary)
                       : null,
                   onTap: () {
-                    setState(() {
-                      _selectedStatus = status;
-                    });
+                    setState(() => _selectedStatus = status);
                     Navigator.pop(context);
                   },
                 );
@@ -211,146 +223,84 @@ class _OrderHistoryScreenState extends State<OrderHistoryScreen> {
   void _clearAllFilters() {
     setState(() {
       _searchController.clear();
-      _selectedStatus = OrderStatus.all;
+      _selectedStatus = HistoryFilter.all;
       _selectedType = 'All';
       _selectedDateRange = 'All Time';
       _customDateRange = null;
     });
   }
 
-  List<Order> _getFilteredOrders() {
-    List<Order> orders = [
-      Order(
-        id: '#OD-12457',
-        timeAgo: '15 minutes ago',
-        status: OrderStatus.completed,
-        location: 'Table 5',
-        itemCount: 2,
-        totalAmount: 45.50,
-        orderType: 'Dine-in',
-        orderDate: DateTime.now().subtract(const Duration(minutes: 15)),
-        items: [
-          OrderItem(name: 'Margherita Pizza', quantity: 1, price: 18.50),
-          OrderItem(name: 'Caesar Salad', quantity: 1, price: 12.00),
-          OrderItem(name: 'Coke', quantity: 2, price: 7.50),
-        ],
-      ),
-      Order(
-        id: '#OD-12456',
-        timeAgo: '1 hour ago',
-        status: OrderStatus.completed,
-        location: 'Takeaway',
-        itemCount: 4,
-        totalAmount: 82.00,
-        orderType: 'Takeaway',
-        orderDate: DateTime.now().subtract(const Duration(hours: 1)),
-        items: [
-          OrderItem(name: 'Pepperoni Pizza', quantity: 1, price: 20.00),
-          OrderItem(name: 'Garlic Bread', quantity: 2, price: 16.00),
-          OrderItem(name: 'Pasta Carbonara', quantity: 1, price: 16.00),
-          OrderItem(name: 'Tiramisu', quantity: 1, price: 8.00),
-        ],
-      ),
-      Order(
-        id: '#OD-12455',
-        timeAgo: '2 hours ago',
-        status: OrderStatus.canceled,
-        location: 'Table 2',
-        itemCount: 3,
-        totalAmount: 61.25,
-        orderType: 'Dine-in',
-        orderDate: DateTime.now().subtract(const Duration(hours: 2)),
-        items: [
-          OrderItem(name: 'BBQ Chicken Pizza', quantity: 1, price: 22.00),
-          OrderItem(name: 'Onion Rings', quantity: 2, price: 14.00),
-          OrderItem(name: 'Chocolate Cake', quantity: 1, price: 8.25),
-        ],
-      ),
-      Order(
-        id: '#OD-12454',
-        timeAgo: 'Yesterday',
-        status: OrderStatus.completed,
-        location: 'Delivery',
-        itemCount: 5,
-        totalAmount: 112.70,
-        orderType: 'Delivery',
-        orderDate: DateTime.now().subtract(const Duration(days: 1)),
-        items: [
-          OrderItem(name: 'Family Pizza', quantity: 1, price: 35.00),
-          OrderItem(name: 'Chicken Wings', quantity: 2, price: 24.00),
-          OrderItem(name: 'Greek Salad', quantity: 1, price: 14.00),
-          OrderItem(name: 'Brownie', quantity: 2, price: 16.00),
-          OrderItem(name: 'Drinks', quantity: 4, price: 23.70),
-        ],
-      ),
-      Order(
-        id: '#OD-12453',
-        timeAgo: '2 days ago',
-        status: OrderStatus.pending,
-        location: 'Table 8',
-        itemCount: 2,
-        totalAmount: 34.50,
-        orderType: 'Dine-in',
-        orderDate: DateTime.now().subtract(const Duration(days: 2)),
-        items: [
-          OrderItem(name: 'Veggie Pizza', quantity: 1, price: 16.50),
-          OrderItem(name: 'Fries', quantity: 1, price: 6.00),
-          OrderItem(name: 'Lemonade', quantity: 2, price: 12.00),
-        ],
-      ),
-    ];
+  List<app_order.Order> _getFilteredOrders() {
+    List<app_order.Order> orders = Provider.of<OrdersProvider>(context, listen: true).orders;
 
-    // Apply search filter
     if (_searchController.text.isNotEmpty) {
+      final q = _searchController.text.toLowerCase();
       orders = orders.where((order) =>
-      order.id.toLowerCase().contains(_searchController.text.toLowerCase()) ||
-          order.location.toLowerCase().contains(_searchController.text.toLowerCase()) ||
-          order.items.any((item) => item.name.toLowerCase().contains(_searchController.text.toLowerCase()))
-      ).toList();
+          order.id.toLowerCase().contains(q) ||
+          order.customerName.toLowerCase().contains(q) ||
+          order.tableNumber.toLowerCase().contains(q) ||
+          order.items.any((item) => item.name.toLowerCase().contains(q))).toList();
     }
 
-    // Apply status filter
-    if (_selectedStatus != OrderStatus.all) {
-      orders = orders.where((order) => order.status == _selectedStatus).toList();
+    if (_selectedStatus != HistoryFilter.all) {
+      switch (_selectedStatus) {
+        case HistoryFilter.pending:
+          orders = orders.where((o) =>
+              o.status == app_order.OrderStatus.pending ||
+              o.status == app_order.OrderStatus.accepted ||
+              o.status == app_order.OrderStatus.preparing ||
+              o.status == app_order.OrderStatus.ready ||
+              o.status == app_order.OrderStatus.outForDelivery).toList();
+          break;
+        case HistoryFilter.completed:
+          orders = orders.where((o) => o.status == app_order.OrderStatus.completed).toList();
+          break;
+        case HistoryFilter.cancelled:
+          orders = orders.where((o) => o.status == app_order.OrderStatus.cancelled).toList();
+          break;
+        case HistoryFilter.all:
+          break;
+      }
     }
 
-    // Apply type filter
     if (_selectedType != 'All') {
-      orders = orders.where((order) => order.orderType == _selectedType).toList();
+      app_order.OrderType? type;
+      switch (_selectedType) {
+        case 'Dine-in': type = app_order.OrderType.dineIn; break;
+        case 'Takeaway': type = app_order.OrderType.takeaway; break;
+        case 'Delivery': type = app_order.OrderType.delivery; break;
+        default: break;
+      }
+      if (type != null) orders = orders.where((o) => o.orderType == type).toList();
     }
 
-    // Apply date range filter
     if (_selectedDateRange != 'All Time') {
       final now = DateTime.now();
       switch (_selectedDateRange) {
         case 'Today':
-          orders = orders.where((order) =>
-          order.orderDate.year == now.year &&
-              order.orderDate.month == now.month &&
-              order.orderDate.day == now.day).toList();
+          orders = orders.where((o) =>
+              o.orderTime.year == now.year && o.orderTime.month == now.month && o.orderTime.day == now.day).toList();
           break;
         case 'Yesterday':
           final yesterday = now.subtract(const Duration(days: 1));
-          orders = orders.where((order) =>
-          order.orderDate.year == yesterday.year &&
-              order.orderDate.month == yesterday.month &&
-              order.orderDate.day == yesterday.day).toList();
+          orders = orders.where((o) =>
+              o.orderTime.year == yesterday.year && o.orderTime.month == yesterday.month && o.orderTime.day == yesterday.day).toList();
           break;
         case 'This Week':
           final startOfWeek = now.subtract(Duration(days: now.weekday - 1));
-          orders = orders.where((order) => order.orderDate.isAfter(startOfWeek)).toList();
+          orders = orders.where((o) => o.orderTime.isAfter(startOfWeek)).toList();
           break;
         case 'This Month':
-          orders = orders.where((order) =>
-          order.orderDate.year == now.year &&
-              order.orderDate.month == now.month).toList();
+          orders = orders.where((o) => o.orderTime.year == now.year && o.orderTime.month == now.month).toList();
           break;
         case 'Custom':
           if (_customDateRange != null) {
-            orders = orders.where((order) =>
-            order.orderDate.isAfter(_customDateRange!.start) &&
-                order.orderDate.isBefore(_customDateRange!.end.add(const Duration(days: 1)))).toList();
+            orders = orders.where((o) =>
+                o.orderTime.isAfter(_customDateRange!.start) &&
+                o.orderTime.isBefore(_customDateRange!.end.add(const Duration(days: 1)))).toList();
           }
+          break;
+        default:
           break;
       }
     }
@@ -358,7 +308,24 @@ class _OrderHistoryScreenState extends State<OrderHistoryScreen> {
     return orders;
   }
 
-  void _showOrderDetails(BuildContext context, Order order) {
+  String _orderTypeString(app_order.OrderType t) {
+    switch (t) {
+      case app_order.OrderType.dineIn: return 'Dine-in';
+      case app_order.OrderType.takeaway: return 'Takeaway';
+      case app_order.OrderType.delivery: return 'Delivery';
+    }
+  }
+
+  String _timeAgo(DateTime d) {
+    final diff = DateTime.now().difference(d);
+    if (diff.inMinutes < 60) return '${diff.inMinutes} minutes ago';
+    if (diff.inHours < 24) return '${diff.inHours} hour${diff.inHours > 1 ? 's' : ''} ago';
+    if (diff.inDays == 1) return 'Yesterday';
+    if (diff.inDays < 7) return '${diff.inDays} days ago';
+    return '${d.day}/${d.month}/${d.year}';
+  }
+
+  void _showOrderDetails(BuildContext context, app_order.Order order) {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -392,10 +359,10 @@ class _OrderHistoryScreenState extends State<OrderHistoryScreen> {
 
               // Order Info
               _buildOrderDetailRow('Order ID', order.id),
-              _buildOrderDetailRow('Date', '${_formatDate(order.orderDate)} at ${_formatTime(order.orderDate)}'),
-              _buildOrderDetailRow('Type', order.orderType),
-              _buildOrderDetailRow('Location', order.location),
-              _buildOrderDetailRow('Status', _getStatusText(order.status),
+              _buildOrderDetailRow('Date', '${_formatDate(order.orderTime)} at ${_formatTime(order.orderTime)}'),
+              _buildOrderDetailRow('Type', _orderTypeString(order.orderType)),
+              _buildOrderDetailRow('Location', order.tableNumber),
+              _buildOrderDetailRow('Status', _orderStatusText(order.status),
                   status: order.status),
 
               const SizedBox(height: 16),
@@ -441,7 +408,7 @@ class _OrderHistoryScreenState extends State<OrderHistoryScreen> {
               const SizedBox(height: 24),
 
               // Actions
-              if (order.status == OrderStatus.pending)
+              if (order.status == app_order.OrderStatus.pending)
                 Row(
                   children: [
                     Expanded(
@@ -478,7 +445,7 @@ class _OrderHistoryScreenState extends State<OrderHistoryScreen> {
     );
   }
 
-  Widget _buildOrderDetailRow(String label, String value, {OrderStatus? status}) {
+  Widget _buildOrderDetailRow(String label, String value, {app_order.OrderStatus? status}) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 8),
       child: Row(
@@ -502,7 +469,7 @@ class _OrderHistoryScreenState extends State<OrderHistoryScreen> {
     );
   }
 
-  Widget _buildOrderItemRow(BuildContext context, OrderItem item) {
+  Widget _buildOrderItemRow(BuildContext context, app_order.OrderItem item) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 8),
       child: Row(
@@ -545,16 +512,24 @@ class _OrderHistoryScreenState extends State<OrderHistoryScreen> {
     return '${date.hour}:${date.minute.toString().padLeft(2, '0')}';
   }
 
-  String _getStatusText(OrderStatus status) {
+  String _getHistoryFilterText(HistoryFilter status) {
     switch (status) {
-      case OrderStatus.all:
-        return 'All';
-      case OrderStatus.pending:
-        return 'Pending';
-      case OrderStatus.completed:
-        return 'Completed';
-      case OrderStatus.canceled:
-        return 'Canceled';
+      case HistoryFilter.all: return 'All';
+      case HistoryFilter.pending: return 'Pending';
+      case HistoryFilter.completed: return 'Completed';
+      case HistoryFilter.cancelled: return 'Cancelled';
+    }
+  }
+
+  String _orderStatusText(app_order.OrderStatus status) {
+    switch (status) {
+      case app_order.OrderStatus.pending: return 'Pending';
+      case app_order.OrderStatus.accepted: return 'Accepted';
+      case app_order.OrderStatus.preparing: return 'Preparing';
+      case app_order.OrderStatus.ready: return 'Ready';
+      case app_order.OrderStatus.outForDelivery: return 'Out for Delivery';
+      case app_order.OrderStatus.completed: return 'Completed';
+      case app_order.OrderStatus.cancelled: return 'Cancelled';
     }
   }
 
@@ -735,7 +710,7 @@ class _OrderHistoryScreenState extends State<OrderHistoryScreen> {
               _buildFilterChip(
                 context,
                 icon: Icons.filter_list,
-                text: 'Status: ${_getStatusText(_selectedStatus)}',
+                text: 'Status: ${_getHistoryFilterText(_selectedStatus)}',
                 hasDropdown: true,
                 isLargeScreen: isLargeScreen,
                 onTap: () => _showStatusFilter(context),
@@ -868,7 +843,7 @@ class _OrderHistoryScreenState extends State<OrderHistoryScreen> {
     );
   }
 
-  Widget _buildOrderCard(BuildContext context, Order order, bool isLargeScreen) {
+  Widget _buildOrderCard(BuildContext context, app_order.Order order, bool isLargeScreen) {
     final theme = Theme.of(context);
 
     return GestureDetector(
@@ -891,7 +866,7 @@ class _OrderHistoryScreenState extends State<OrderHistoryScreen> {
               children: [
                 Expanded(
                   child: Text(
-                    '${order.id} - ${order.timeAgo}',
+                    '${order.id} - ${_timeAgo(order.orderTime)}',
                     style: theme.textTheme.bodySmall?.copyWith(
                       color: theme.colorScheme.onSurfaceVariant,
                     ),
@@ -903,7 +878,7 @@ class _OrderHistoryScreenState extends State<OrderHistoryScreen> {
             ),
             SizedBox(height: isLargeScreen ? 12 : 8),
             Text(
-              order.location,
+              order.tableNumber,
               style: theme.textTheme.headlineSmall?.copyWith(
                 fontWeight: FontWeight.w700,
                 fontSize: isLargeScreen ? 22 : 18,
@@ -911,7 +886,7 @@ class _OrderHistoryScreenState extends State<OrderHistoryScreen> {
             ),
             SizedBox(height: isLargeScreen ? 8 : 4),
             Text(
-              order.orderType,
+              _orderTypeString(order.orderType),
               style: theme.textTheme.bodyMedium?.copyWith(
                 color: theme.colorScheme.onSurfaceVariant,
               ),
@@ -925,7 +900,7 @@ class _OrderHistoryScreenState extends State<OrderHistoryScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      '${order.itemCount} Items',
+                      '${order.items.length} Items',
                       style: theme.textTheme.bodyMedium?.copyWith(
                         color: theme.colorScheme.onSurfaceVariant,
                       ),
@@ -968,35 +943,40 @@ class _OrderHistoryScreenState extends State<OrderHistoryScreen> {
     );
   }
 
-  Widget _buildStatusChip(BuildContext context, OrderStatus status, bool isLargeScreen) {
+  Widget _buildStatusChip(BuildContext context, app_order.OrderStatus status, bool isLargeScreen) {
     final theme = Theme.of(context);
-    final Color backgroundColor;
-    final Color textColor;
-    final Color dotColor;
-
+    Color backgroundColor = Colors.grey.withOpacity(0.2);
+    Color textColor = Colors.grey;
+    Color dotColor = Colors.grey;
     switch (status) {
-      case OrderStatus.completed:
+      case app_order.OrderStatus.completed:
         backgroundColor = Colors.green.withOpacity(0.2);
         textColor = Colors.green;
         dotColor = Colors.green;
         break;
-      case OrderStatus.canceled:
+      case app_order.OrderStatus.cancelled:
         backgroundColor = Colors.red.withOpacity(0.2);
         textColor = Colors.red;
         dotColor = Colors.red;
         break;
-      case OrderStatus.pending:
+      case app_order.OrderStatus.pending:
+      case app_order.OrderStatus.accepted:
         backgroundColor = Colors.orange.withOpacity(0.2);
         textColor = Colors.orange;
         dotColor = Colors.orange;
         break;
-      case OrderStatus.all:
-        backgroundColor = Colors.grey.withOpacity(0.2);
-        textColor = Colors.grey;
-        dotColor = Colors.grey;
+      case app_order.OrderStatus.preparing:
+      case app_order.OrderStatus.ready:
+        backgroundColor = Colors.blue.withOpacity(0.2);
+        textColor = Colors.blue;
+        dotColor = Colors.blue;
+        break;
+      case app_order.OrderStatus.outForDelivery:
+        backgroundColor = Colors.teal.withOpacity(0.2);
+        textColor = Colors.teal;
+        dotColor = Colors.teal;
         break;
     }
-
     return Container(
       padding: EdgeInsets.symmetric(
         horizontal: isLargeScreen ? 12 : 8,
@@ -1012,14 +992,11 @@ class _OrderHistoryScreenState extends State<OrderHistoryScreen> {
           Container(
             width: isLargeScreen ? 10 : 8,
             height: isLargeScreen ? 10 : 8,
-            decoration: BoxDecoration(
-              color: dotColor,
-              shape: BoxShape.circle,
-            ),
+            decoration: BoxDecoration(color: dotColor, shape: BoxShape.circle),
           ),
           SizedBox(width: isLargeScreen ? 8 : 6),
           Text(
-            _getStatusText(status),
+            _orderStatusText(status),
             style: theme.textTheme.labelSmall?.copyWith(
               color: textColor,
               fontWeight: FontWeight.w500,
@@ -1031,73 +1008,18 @@ class _OrderHistoryScreenState extends State<OrderHistoryScreen> {
     );
   }
 
-  Widget _buildStatusDot(OrderStatus status, double size) {
+  Widget _buildHistoryFilterDot(HistoryFilter status, double size) {
     final Color color;
     switch (status) {
-      case OrderStatus.completed:
-        color = Colors.green;
-        break;
-      case OrderStatus.canceled:
-        color = Colors.red;
-        break;
-      case OrderStatus.pending:
-        color = Colors.orange;
-        break;
-      case OrderStatus.all:
-        color = Colors.grey;
-        break;
+      case HistoryFilter.completed: color = Colors.green; break;
+      case HistoryFilter.cancelled: color = Colors.red; break;
+      case HistoryFilter.pending: color = Colors.orange; break;
+      case HistoryFilter.all: color = Colors.grey; break;
     }
-
     return Container(
       width: size,
       height: size,
-      decoration: BoxDecoration(
-        color: color,
-        shape: BoxShape.circle,
-      ),
+      decoration: BoxDecoration(color: color, shape: BoxShape.circle),
     );
   }
-}
-
-class Order {
-  final String id;
-  final String timeAgo;
-  final OrderStatus status;
-  final String location;
-  final int itemCount;
-  final double totalAmount;
-  final String orderType;
-  final DateTime orderDate;
-  final List<OrderItem> items;
-
-  Order({
-    required this.id,
-    required this.timeAgo,
-    required this.status,
-    required this.location,
-    required this.itemCount,
-    required this.totalAmount,
-    required this.orderType,
-    required this.orderDate,
-    required this.items,
-  });
-}
-
-class OrderItem {
-  final String name;
-  final int quantity;
-  final double price;
-
-  OrderItem({
-    required this.name,
-    required this.quantity,
-    required this.price,
-  });
-}
-
-enum OrderStatus {
-  all,
-  pending,
-  completed,
-  canceled,
 }

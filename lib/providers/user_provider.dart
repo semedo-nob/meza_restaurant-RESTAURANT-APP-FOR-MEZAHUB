@@ -77,6 +77,9 @@ class UserProvider with ChangeNotifier {
     required String password,
     required String restaurantName,
     required String phoneNumber,
+    String? address,
+    double? latitude,
+    double? longitude,
   }) async {
     _isLoading = true;
     _error = null;
@@ -88,6 +91,9 @@ class UserProvider with ChangeNotifier {
         password: password,
         restaurantName: restaurantName,
         phoneNumber: phoneNumber,
+        address: address,
+        latitude: latitude,
+        longitude: longitude,
       );
 
       if (result['success'] == true) {

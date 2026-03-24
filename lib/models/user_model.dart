@@ -4,6 +4,7 @@ class User {
   final String email;
   final String restaurantName;
   final String phoneNumber;
+  final String profileImage;
   final String role;
   final DateTime createdAt;
   final DateTime? updatedAt;
@@ -13,20 +14,26 @@ class User {
     required this.email,
     required this.restaurantName,
     required this.phoneNumber,
+    required this.profileImage,
     required this.role,
     required this.createdAt,
     this.updatedAt,
   });
 
   factory User.fromJson(Map<String, dynamic> json) {
+    final id = json['id'];
+    final idStr = id != null ? id.toString() : (json['_id']?.toString() ?? '');
     return User(
-      id: json['id'] ?? json['_id'] ?? '',
+      id: idStr,
       email: json['email'] ?? '',
-      restaurantName: json['restaurantName'] ?? '',
-      phoneNumber: json['phoneNumber'] ?? '',
+      restaurantName: json['restaurantName'] ?? json['name'] ?? '',
+      phoneNumber: json['phoneNumber'] ?? json['phone'] ?? '',
+      profileImage: json['profile_image'] ?? json['profileImage'] ?? '',
       role: json['role'] ?? 'restaurant_owner',
-      createdAt: DateTime.parse(json['createdAt'] ?? DateTime.now().toString()),
-      updatedAt: json['updatedAt'] != null ? DateTime.parse(json['updatedAt']) : null,
+      createdAt: json['created_at'] != null
+          ? DateTime.tryParse(json['created_at'].toString()) ?? DateTime.now()
+          : DateTime.tryParse(json['createdAt']?.toString() ?? '') ?? DateTime.now(),
+      updatedAt: json['updatedAt'] != null ? DateTime.tryParse(json['updatedAt'].toString()) : null,
     );
   }
 
@@ -36,6 +43,7 @@ class User {
       'email': email,
       'restaurantName': restaurantName,
       'phoneNumber': phoneNumber,
+      'profileImage': profileImage,
       'role': role,
       'createdAt': createdAt.toIso8601String(),
       'updatedAt': updatedAt?.toIso8601String(),
@@ -47,6 +55,7 @@ class User {
     String? email,
     String? restaurantName,
     String? phoneNumber,
+    String? profileImage,
     String? role,
     DateTime? createdAt,
     DateTime? updatedAt,
@@ -56,6 +65,7 @@ class User {
       email: email ?? this.email,
       restaurantName: restaurantName ?? this.restaurantName,
       phoneNumber: phoneNumber ?? this.phoneNumber,
+      profileImage: profileImage ?? this.profileImage,
       role: role ?? this.role,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,

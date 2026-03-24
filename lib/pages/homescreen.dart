@@ -1,4 +1,5 @@
 // lib/pages/homescreen.dart
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:meza_restaurant/pages/profile.dart';
@@ -10,6 +11,9 @@ import '../widgets/app_drawer.dart';
 import '../widgets/responsive_layout.dart';
 import '../theme/app_colors.dart';
 import '../providers/theme_provider.dart';
+import '../providers/orders_provider.dart';
+import '../models/order.dart';
+import '../services/backend_api.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -124,125 +128,34 @@ class OrdersPage extends StatefulWidget {
 
 class _OrdersPageState extends State<OrdersPage> with SingleTickerProviderStateMixin {
   late TabController _tabController;
-  final List<Order> _orders = [];
-  final List<String> _deliveryPersons = ['John Delivery', 'Mike Rider', 'Sarah Express', 'David Courier'];
+  Timer? _ordersRefreshTimer;
 
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 5, vsync: this);
-    _loadSampleOrders();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      Provider.of<OrdersProvider>(context, listen: false).loadOrders();
+    });
+    // Refresh orders every 15s so new customer orders appear quickly without manual pull
+    _ordersRefreshTimer = Timer.periodic(const Duration(seconds: 15), (_) {
+      if (mounted) {
+        Provider.of<OrdersProvider>(context, listen: false).loadOrders();
+      }
+    });
   }
 
   @override
   void dispose() {
+    _ordersRefreshTimer?.cancel();
     _tabController.dispose();
     super.dispose();
   }
 
-  void _loadSampleOrders() {
-    setState(() {
-      _orders.addAll([
-        Order(
-          id: '#OD-12460',
-          customerName: 'John Smith',
-          tableNumber: 'Table 5',
-          orderType: OrderType.dineIn,
-          status: OrderStatus.pending,
-          items: [
-            OrderItem(name: 'Margherita Pizza', quantity: 1, price: 18.50),
-            OrderItem(name: 'Caesar Salad', quantity: 1, price: 12.00),
-            OrderItem(name: 'Coke', quantity: 2, price: 3.75),
-          ],
-          totalAmount: 37.75,
-          orderTime: DateTime.now().subtract(const Duration(minutes: 5)),
-          estimatedTime: 25,
-        ),
-        Order(
-          id: '#OD-12459',
-          customerName: 'Sarah Johnson',
-          tableNumber: 'Takeaway Counter',
-          orderType: OrderType.takeaway,
-          status: OrderStatus.accepted,
-          items: [
-            OrderItem(name: 'Pepperoni Pizza', quantity: 1, price: 20.00),
-            OrderItem(name: 'Garlic Bread', quantity: 1, price: 8.00),
-          ],
-          totalAmount: 28.00,
-          orderTime: DateTime.now().subtract(const Duration(minutes: 15)),
-          estimatedTime: 20,
-        ),
-        Order(
-          id: '#OD-12458',
-          customerName: 'Mike Davis',
-          tableNumber: 'Table 3',
-          orderType: OrderType.dineIn,
-          status: OrderStatus.preparing,
-          items: [
-            OrderItem(name: 'BBQ Chicken Pizza', quantity: 1, price: 22.00),
-            OrderItem(name: 'Onion Rings', quantity: 2, price: 7.00),
-            OrderItem(name: 'Chocolate Cake', quantity: 1, price: 8.25),
-          ],
-          totalAmount: 44.25,
-          orderTime: DateTime.now().subtract(const Duration(minutes: 25)),
-          estimatedTime: 15,
-        ),
-        Order(
-          id: '#OD-12457',
-          customerName: 'Emma Wilson',
-          tableNumber: '123 Main St, Apt 4B',
-          orderType: OrderType.delivery,
-          status: OrderStatus.ready,
-          items: [
-            OrderItem(name: 'Family Pizza', quantity: 1, price: 35.00),
-            OrderItem(name: 'Chicken Wings', quantity: 1, price: 12.00),
-          ],
-          totalAmount: 47.00,
-          orderTime: DateTime.now().subtract(const Duration(minutes: 40)),
-          estimatedTime: 0,
-        ),
-        Order(
-          id: '#OD-12456',
-          customerName: 'David Brown',
-          tableNumber: 'Table 8',
-          orderType: OrderType.dineIn,
-          status: OrderStatus.completed,
-          items: [
-            OrderItem(name: 'Veggie Pizza', quantity: 1, price: 16.50),
-            OrderItem(name: 'Fries', quantity: 1, price: 6.00),
-          ],
-          totalAmount: 22.50,
-          orderTime: DateTime.now().subtract(const Duration(hours: 1)),
-          estimatedTime: 0,
-        ),
-        Order(
-          id: '#OD-12455',
-          customerName: 'Lisa Anderson',
-          tableNumber: '456 Oak Avenue',
-          orderType: OrderType.delivery,
-          status: OrderStatus.outForDelivery,
-          items: [
-            OrderItem(name: 'Pepperoni Pizza', quantity: 1, price: 20.00),
-            OrderItem(name: 'Garlic Bread', quantity: 2, price: 16.00),
-          ],
-          totalAmount: 36.00,
-          orderTime: DateTime.now().subtract(const Duration(minutes: 50)),
-          estimatedTime: 0,
-          assignedToDelivery: true,
-          deliveryPerson: 'John Delivery',
-        ),
-      ]);
-    });
-  }
-
-  void _updateOrderStatus(String orderId, OrderStatus newStatus) {
-    setState(() {
-      final order = _orders.firstWhere((order) => order.id == orderId);
-      order.status = newStatus;
-
-      // Auto-navigate to appropriate tab
-      _navigateToTabForStatus(newStatus);
-    });
+  Future<void> _updateOrderStatus(String orderId, OrderStatus newStatus) async {
+    final provider = Provider.of<OrdersProvider>(context, listen: false);
+    final ok = await provider.updateStatus(orderId, newStatus);
+    if (ok && mounted) _navigateToTabForStatus(newStatus);
   }
 
   void _navigateToTabForStatus(OrderStatus status) {
@@ -263,94 +176,87 @@ class _OrdersPageState extends State<OrdersPage> with SingleTickerProviderStateM
       case OrderStatus.completed:
         _tabController.animateTo(4);
         break;
+      case OrderStatus.cancelled:
+        // TODO: Handle this case.
+        throw UnimplementedError();
     }
   }
 
-  void _assignToDelivery(String orderId) {
-    String? selectedDeliveryPerson;
-
-    showDialog(
-      context: context,
-      builder: (context) {
-        return StatefulBuilder(
-          builder: (context, setState) {
-            return AlertDialog(
-              title: const Text('Assign to Delivery'),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Text('Select a delivery person:'),
-                  const SizedBox(height: 16),
-                  DropdownButtonFormField<String>(
-                    value: selectedDeliveryPerson,
-                    decoration: const InputDecoration(
-                      border: OutlineInputBorder(),
-                      labelText: 'Delivery Person',
-                    ),
-                    items: _deliveryPersons.map((person) {
-                      return DropdownMenuItem(
-                        value: person,
-                        child: Text(person),
-                      );
-                    }).toList(),
-                    onChanged: (value) {
-                      setState(() {
-                        selectedDeliveryPerson = value;
-                      });
+  void _assignToDelivery(String orderId) async {
+    try {
+      final riders = await BackendApi.getRiders();
+      if (!mounted) return;
+      if (riders.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('No riders available')),
+        );
+        return;
+      }
+      int? selectedRiderId;
+      final names = riders.map((r) {
+        final m = Map<String, dynamic>.from(r as Map);
+        return {'id': m['id'] as int, 'name': m['name']?.toString() ?? 'Rider #${m['id']}'};
+      }).toList();
+      showDialog(
+        context: context,
+        builder: (ctx) {
+          return StatefulBuilder(
+            builder: (ctx, setDialogState) {
+              return AlertDialog(
+                title: const Text('Assign to Delivery'),
+                content: DropdownButtonFormField<int>(
+                  value: selectedRiderId,
+                  decoration: const InputDecoration(
+                    border: OutlineInputBorder(),
+                    labelText: 'Delivery Person',
+                  ),
+                  items: names.map((e) => DropdownMenuItem(value: e['id'] as int, child: Text(e['name'] as String))).toList(),
+                  onChanged: (value) => setDialogState(() => selectedRiderId = value),
+                ),
+                actions: [
+                  TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+                  ElevatedButton(
+                    onPressed: selectedRiderId == null ? null : () async {
+                      Navigator.pop(ctx);
+                      final ok = await Provider.of<OrdersProvider>(context, listen: false).assignRider(orderId, selectedRiderId!);
+                      if (mounted) {
+                        if (ok) _tabController.animateTo(3);
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text(ok ? 'Rider assigned' : 'Failed to assign rider')),
+                        );
+                      }
                     },
+                    child: const Text('Assign'),
                   ),
                 ],
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text('Cancel'),
-                ),
-                ElevatedButton(
-                  onPressed: selectedDeliveryPerson == null ? null : () {
-                    _assignDeliveryPerson(orderId, selectedDeliveryPerson!);
-                    Navigator.pop(context);
-                  },
-                  child: const Text('Assign'),
-                ),
-              ],
-            );
-          },
+              );
+            },
+          );
+        },
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not load riders: $e')),
         );
-      },
-    );
-  }
-
-  void _assignDeliveryPerson(String orderId, String deliveryPerson) {
-    setState(() {
-      final order = _orders.firstWhere((order) => order.id == orderId);
-      order.status = OrderStatus.outForDelivery;
-      order.assignedToDelivery = true;
-      order.deliveryPerson = deliveryPerson;
-    });
-    _tabController.animateTo(3); // Move to Delivery tab
+      }
+    }
   }
 
   void _completeDeliveryOrder(String orderId) {
     showDialog(
       context: context,
-      builder: (context) {
+      builder: (ctx) {
         return AlertDialog(
           title: const Text('Complete Delivery'),
           content: const Text('Mark this delivery as completed and delivered to customer?'),
           actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel'),
-            ),
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
             ElevatedButton(
-              onPressed: () {
-                setState(() {
-                  final order = _orders.firstWhere((order) => order.id == orderId);
-                  order.status = OrderStatus.completed;
-                });
-                Navigator.pop(context);
-                _tabController.animateTo(4); // Move to Completed tab
+              onPressed: () async {
+                Navigator.pop(ctx);
+                await _updateOrderStatus(orderId, OrderStatus.completed);
+                if (mounted) _tabController.animateTo(4);
               },
               child: const Text('Mark Delivered'),
             ),
@@ -361,34 +267,49 @@ class _OrdersPageState extends State<OrdersPage> with SingleTickerProviderStateM
   }
 
   void _completeRegularOrder(String orderId) {
-    setState(() {
-      final order = _orders.firstWhere((order) => order.id == orderId);
-      order.status = OrderStatus.completed;
-    });
-    _tabController.animateTo(4); // Move to Completed tab
+    _updateOrderStatus(orderId, OrderStatus.completed);
+    _tabController.animateTo(4);
   }
 
   List<Order> _getOrdersByStatus(OrderStatus status) {
-    return _orders.where((order) => order.status == status).toList();
+    return Provider.of<OrdersProvider>(context, listen: true).getByStatus(status);
   }
 
   List<Order> _getPreparingOrders() {
-    return _orders.where((order) =>
-    order.status == OrderStatus.accepted || order.status == OrderStatus.preparing
-    ).toList();
+    return Provider.of<OrdersProvider>(context, listen: true).preparingOrders;
   }
 
   @override
   Widget build(BuildContext context) {
-    return ResponsiveLayout(
-      builder: (context, constraints) {
-        final theme = Theme.of(context);
-        final isDark = theme.brightness == Brightness.dark;
+    return Consumer<OrdersProvider>(
+      builder: (context, ordersProvider, _) {
+        if (ordersProvider.loading && ordersProvider.orders.isEmpty) {
+          return const Center(child: CircularProgressIndicator());
+        }
+        if (ordersProvider.error != null && ordersProvider.orders.isEmpty) {
+          return Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(ordersProvider.error!, textAlign: TextAlign.center),
+                const SizedBox(height: 16),
+                TextButton(
+                  onPressed: () { ordersProvider.loadOrders(); },
+                  child: const Text('Retry'),
+                ),
+              ],
+            ),
+          );
+        }
+        return ResponsiveLayout(
+          builder: (context, constraints) {
+            final theme = Theme.of(context);
+            final isDark = theme.brightness == Brightness.dark;
 
-        return Column(
-          children: [
-            // Tab Bar
-            Container(
+            return Column(
+              children: [
+                // Tab Bar
+                Container(
               decoration: BoxDecoration(
                 color: isDark ? AppColors.surfaceDark : AppColors.surfaceLight,
                 border: Border(
@@ -433,47 +354,67 @@ class _OrdersPageState extends State<OrdersPage> with SingleTickerProviderStateM
         );
       },
     );
+      },
+    );
   }
 
   Widget _buildOrderList(BuildContext context, List<Order> orders, String emptyMessage) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
 
+    Future<void> onRefresh() async {
+      await Provider.of<OrdersProvider>(context, listen: false).loadOrders();
+    }
+
     if (orders.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              Icons.receipt_long,
-              size: 64,
-              color: isDark ? AppColors.textSecondaryDark : AppColors.textSecondaryLight,
-            ),
-            const SizedBox(height: 16),
-            Text(
-              'No $emptyMessage',
-              style: theme.textTheme.titleLarge?.copyWith(
-                color: isDark ? AppColors.textPrimaryDark : AppColors.textPrimaryLight,
+      return RefreshIndicator(
+        onRefresh: onRefresh,
+        child: SingleChildScrollView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          child: SizedBox(
+            height: MediaQuery.of(context).size.height * 0.5,
+            child: Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    Icons.receipt_long,
+                    size: 64,
+                    color: isDark ? AppColors.textSecondaryDark : AppColors.textSecondaryLight,
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    'No $emptyMessage',
+                    style: theme.textTheme.titleLarge?.copyWith(
+                      color: isDark ? AppColors.textPrimaryDark : AppColors.textPrimaryLight,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Pull down to refresh • New orders will appear here',
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: isDark ? AppColors.textSecondaryDark : AppColors.textSecondaryLight,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                ],
               ),
             ),
-            const SizedBox(height: 8),
-            Text(
-              'New orders will appear here',
-              style: theme.textTheme.bodyMedium?.copyWith(
-                color: isDark ? AppColors.textSecondaryDark : AppColors.textSecondaryLight,
-              ),
-            ),
-          ],
+          ),
         ),
       );
     }
 
-    return ListView.builder(
-      padding: const EdgeInsets.all(16),
-      itemCount: orders.length,
-      itemBuilder: (context, index) {
-        return _buildOrderCard(context, orders[index]);
-      },
+    return RefreshIndicator(
+      onRefresh: onRefresh,
+      child: ListView.builder(
+        padding: const EdgeInsets.all(16),
+        physics: const AlwaysScrollableScrollPhysics(),
+        itemCount: orders.length,
+        itemBuilder: (context, index) {
+          return _buildOrderCard(context, orders[index]);
+        },
+      ),
     );
   }
 
@@ -688,6 +629,11 @@ class _OrdersPageState extends State<OrdersPage> with SingleTickerProviderStateM
         textColor = Colors.grey;
         statusText = 'Completed';
         break;
+      case OrderStatus.cancelled:
+        backgroundColor = Colors.red.withOpacity(0.2);
+        textColor = Colors.red;
+        statusText = 'Cancelled';
+        break;
     }
 
     return Container(
@@ -719,7 +665,7 @@ class _OrdersPageState extends State<OrdersPage> with SingleTickerProviderStateM
               child: const Text('Accept'),
             ),
             OutlinedButton(
-              onPressed: () => _updateOrderStatus(order.id, OrderStatus.preparing),
+              onPressed: () => _updateOrderStatus(order.id, OrderStatus.cancelled),
               style: OutlinedButton.styleFrom(
                 foregroundColor: Colors.red,
                 side: const BorderSide(color: Colors.red),
@@ -792,6 +738,9 @@ class _OrdersPageState extends State<OrdersPage> with SingleTickerProviderStateM
           ),
           textAlign: TextAlign.center,
         );
+      case OrderStatus.cancelled:
+        // TODO: Handle this case.
+        throw UnimplementedError();
     }
   }
 
@@ -809,59 +758,4 @@ class _OrdersPageState extends State<OrdersPage> with SingleTickerProviderStateM
   String _formatTime(DateTime time) {
     return '${time.hour}:${time.minute.toString().padLeft(2, '0')}';
   }
-}
-
-class Order {
-  final String id;
-  final String customerName;
-  final String tableNumber;
-  final OrderType orderType;
-  OrderStatus status;
-  final List<OrderItem> items;
-  final double totalAmount;
-  final DateTime orderTime;
-  final int estimatedTime;
-  bool assignedToDelivery;
-  String? deliveryPerson;
-
-  Order({
-    required this.id,
-    required this.customerName,
-    required this.tableNumber,
-    required this.orderType,
-    required this.status,
-    required this.items,
-    required this.totalAmount,
-    required this.orderTime,
-    required this.estimatedTime,
-    this.assignedToDelivery = false,
-    this.deliveryPerson,
-  });
-}
-
-class OrderItem {
-  final String name;
-  final int quantity;
-  final double price;
-
-  OrderItem({
-    required this.name,
-    required this.quantity,
-    required this.price,
-  });
-}
-
-enum OrderStatus {
-  pending,
-  accepted,
-  preparing,
-  ready,
-  outForDelivery,
-  completed,
-}
-
-enum OrderType {
-  dineIn,
-  takeaway,
-  delivery,
 }

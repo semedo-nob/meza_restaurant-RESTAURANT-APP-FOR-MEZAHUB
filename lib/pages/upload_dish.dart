@@ -5,6 +5,14 @@ import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_theme.dart';
+import '../services/backend_api.dart';
+
+/// One category from backend (id + name) or a static name for creating new.
+class _CategoryChoice {
+  final int? id;
+  final String name;
+  _CategoryChoice({this.id, required this.name});
+}
 
 class UploadDishScreen extends StatefulWidget {
   const UploadDishScreen({super.key});
@@ -17,22 +25,102 @@ class _UploadDishScreenState extends State<UploadDishScreen> {
   final TextEditingController _nameController = TextEditingController();
   final TextEditingController _priceController = TextEditingController();
   final TextEditingController _descriptionController = TextEditingController();
-  String _selectedCategory = 'Appetizers';
+  _CategoryChoice? _selectedCategory;
   File? _selectedImage;
   bool _isUploading = false;
+  bool _isLoading = false;
+  String? _loadError;
+  int? _restaurantId;
+  List<_CategoryChoice> _categories = [];
+  String _menuSummary = '';
 
-  final List<String> _categories = [
-    'Appetizers',
-    'Main Courses',
-    'Desserts',
+  /// Enforced to match customer Discover page categories (All, Pizza, Burger, Sushi, Drinks, Desserts) minus All.
+  static const List<String> _defaultCategoryNames = [
+    'Pizza',
+    'Burger',
+    'Sushi',
     'Drinks',
-    'Salads',
-    'Soups',
-    'Seafood',
-    'Vegetarian',
+    'Desserts',
   ];
 
   final ImagePicker _imagePicker = ImagePicker();
+
+  @override
+  void initState() {
+    super.initState();
+    // Form is always visible: start with default categories so the dropdown is never empty
+    _categories = _defaultCategoryNames.map((name) => _CategoryChoice(id: null, name: name)).toList();
+    _selectedCategory = _categories.isNotEmpty ? _categories.first : null;
+    WidgetsBinding.instance.addPostFrameCallback((_) { _loadRestaurantAndCategories(); });
+  }
+
+  Future<void> _loadRestaurantAndCategories() async {
+    setState(() {
+      _isLoading = true;
+      _loadError = null;
+    });
+    try {
+      final restaurants = await BackendApi.getMyRestaurants();
+      if (restaurants.isEmpty) {
+        setState(() {
+          _loadError = 'No restaurant found. Create one in profile or contact support.';
+          _isLoading = false;
+        });
+        return;
+      }
+      final first = restaurants.first as Map<String, dynamic>;
+      final rid = (first['id'] as num?)?.toInt();
+      if (rid == null) {
+        setState(() {
+          _loadError = 'Invalid restaurant data.';
+          _isLoading = false;
+        });
+        return;
+      }
+      List<_CategoryChoice> choices = [];
+      String summary = 'No dishes yet';
+      try {
+        final menu = await BackendApi.getRestaurantMenu(rid);
+        final cats = menu['categories'] as List<dynamic>? ?? [];
+        int totalItems = 0;
+        for (final c in cats) {
+          final m = Map<String, dynamic>.from(c as Map);
+          final id = (m['id'] as num?)?.toInt();
+          final name = m['name'] as String? ?? '';
+          final items = m['items'] as List<dynamic>? ?? [];
+          totalItems += items.length;
+          if (id != null && name.isNotEmpty) {
+            choices.add(_CategoryChoice(id: id, name: name));
+          }
+        }
+        if (cats.isNotEmpty || totalItems > 0) {
+          summary = '${choices.length} categor${choices.length == 1 ? 'y' : 'ies'}, $totalItems dish${totalItems == 1 ? '' : 'es'}';
+        }
+      } catch (_) {
+        // menu might be empty
+      }
+      if (choices.isEmpty) {
+        for (final name in _defaultCategoryNames) {
+          choices.add(_CategoryChoice(id: null, name: name));
+        }
+      }
+      if (!mounted) return;
+      setState(() {
+        _restaurantId = rid;
+        _categories = choices;
+        _selectedCategory = choices.isNotEmpty ? choices.first : null;
+        _menuSummary = summary;
+        _isLoading = false;
+      });
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _loadError = e.toString().replaceFirst('Exception: ', '');
+          _isLoading = false;
+        });
+      }
+    }
+  }
 
   @override
   void dispose() {
@@ -124,74 +212,73 @@ class _UploadDishScreenState extends State<UploadDishScreen> {
   }
 
   Future<void> _uploadDishToCustomerApp() async {
-    // Validate form
-    if (_nameController.text.isEmpty) {
+    if (_restaurantId == null) {
+      _showErrorSnackBar('No restaurant loaded. Try again.');
+      return;
+    }
+    if (_nameController.text.trim().isEmpty) {
       _showErrorSnackBar('Please enter a dish name');
       return;
     }
-
-    if (_priceController.text.isEmpty) {
+    final priceText = _priceController.text.trim();
+    if (priceText.isEmpty) {
       _showErrorSnackBar('Please enter a price');
       return;
     }
-
-    if (_descriptionController.text.isEmpty) {
-      _showErrorSnackBar('Please enter a description');
+    final price = double.tryParse(priceText);
+    if (price == null || price <= 0) {
+      _showErrorSnackBar('Please enter a valid price');
+      return;
+    }
+    if (_selectedCategory == null) {
+      _showErrorSnackBar('Please select a category');
       return;
     }
 
-    if (_selectedImage == null) {
-      _showErrorSnackBar('Please select an image');
-      return;
-    }
-
-    setState(() {
-      _isUploading = true;
-    });
+    setState(() => _isUploading = true);
 
     try {
-      // Simulate API call to customer app
-      await _simulateApiCall();
-
-      // Show success message
-      _showSuccessSnackBar('Dish uploaded successfully to customer app!');
-
-      // Navigate back after successful upload
+      int categoryId = _selectedCategory!.id ?? -1;
+      if (categoryId <= 0) {
+        final created = await BackendApi.createMenuCategory(
+          _restaurantId!,
+          name: _selectedCategory!.name,
+        );
+        categoryId = (created['id'] as num).toInt();
+      }
+      final createdItem = await BackendApi.createMenuItem(
+        _restaurantId!,
+        categoryId: categoryId,
+        name: _nameController.text.trim(),
+        description: _descriptionController.text.trim().isEmpty
+            ? null
+            : _descriptionController.text.trim(),
+        price: price,
+        preparationTime: 10,
+        available: true,
+      );
+      if (_selectedImage != null) {
+        await BackendApi.uploadMenuItemImage(
+          _restaurantId!,
+          (createdItem['id'] as num).toInt(),
+          _selectedImage!,
+        );
+      }
       if (mounted) {
-        context.pop();
+        _showSuccessSnackBar(
+          _selectedImage != null
+              ? 'Dish added to menu! Customers can see it in the app.'
+              : 'Dish added to menu (without photo). Customers can see it in the app.',
+        );
+        _clearForm();
       }
     } catch (e) {
-      _showErrorSnackBar('Failed to upload dish: $e');
-    } finally {
       if (mounted) {
-        setState(() {
-          _isUploading = false;
-        });
+        _showErrorSnackBar('Failed to add dish: ${e.toString().replaceFirst('Exception: ', '')}');
       }
+    } finally {
+      if (mounted) setState(() => _isUploading = false);
     }
-  }
-
-  Future<void> _simulateApiCall() async {
-    // Simulate network delay
-    await Future.delayed(const Duration(seconds: 2));
-
-    // Simulate API response
-    final dishData = {
-      'name': _nameController.text,
-      'price': double.parse(_priceController.text),
-      'description': _descriptionController.text,
-      'category': _selectedCategory,
-      'image': _selectedImage?.path ?? 'No image',
-      'timestamp': DateTime.now().toIso8601String(),
-      'status': 'active',
-    };
-
-    // In a real app, you would send this data to your backend
-    // which would then sync with the customer app
-    print('Dish data to be sent to customer app: $dishData');
-
-    // Simulate successful response
-    return;
   }
 
   void _showSuccessSnackBar(String message) {
@@ -219,7 +306,7 @@ class _UploadDishScreenState extends State<UploadDishScreen> {
       _nameController.clear();
       _priceController.clear();
       _descriptionController.clear();
-      _selectedCategory = 'Appetizers';
+      _selectedCategory = _categories.isNotEmpty ? _categories.first : null;
       _selectedImage = null;
     });
   }
@@ -228,20 +315,68 @@ class _UploadDishScreenState extends State<UploadDishScreen> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
+    final canSubmit = _restaurantId != null && !_isUploading;
 
+    // Consistent form state: restaurant staff always see the same form to add dishes → backend → customers see items and order
     return Scaffold(
       backgroundColor: theme.colorScheme.background,
       body: SafeArea(
         child: Column(
           children: [
-            // App Bar
             _buildAppBar(theme),
-            // Content
+            if (_isLoading) const LinearProgressIndicator(),
+            if (_loadError != null) _buildBanner(theme),
             Expanded(
               child: _buildContent(theme, isDark),
             ),
-            // Bottom Buttons
-            _buildBottomButtons(theme, isDark),
+            _buildBottomButtons(theme, isDark, canSubmit),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildBanner(ThemeData theme) {
+    final isNoRestaurant = _loadError!.toLowerCase().contains('no restaurant');
+    return Material(
+      color: isNoRestaurant
+          ? theme.colorScheme.primaryContainer.withOpacity(0.5)
+          : theme.colorScheme.errorContainer.withOpacity(0.5),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        child: Row(
+          children: [
+            Icon(
+              isNoRestaurant ? Icons.info_outline : Icons.error_outline,
+              size: 22,
+              color: theme.colorScheme.onSurface,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(_loadError!, style: theme.textTheme.bodyMedium),
+                  if (isNoRestaurant)
+                    Text(
+                      'Set up your restaurant in Profile first.',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            TextButton(
+              onPressed: () { _loadRestaurantAndCategories(); },
+              child: const Text('Retry'),
+            ),
+            if (isNoRestaurant)
+              TextButton(
+                onPressed: () => context.push('/profile'),
+                child: const Text('Profile'),
+              ),
           ],
         ),
       ),
@@ -294,7 +429,34 @@ class _UploadDishScreenState extends State<UploadDishScreen> {
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16.0),
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // Your menu summary (real data from backend)
+          if (_menuSummary.isNotEmpty) ...[
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: theme.colorScheme.surfaceVariant.withOpacity(0.6),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: theme.colorScheme.outline.withOpacity(0.3)),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.restaurant_menu, color: theme.colorScheme.primary, size: 20),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Your menu: $_menuSummary',
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      fontWeight: FontWeight.w500,
+                      color: theme.colorScheme.onSurface,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 20),
+          ],
           // Photo Upload Section
           _buildPhotoUpload(theme, isDark),
           const SizedBox(height: 24),
@@ -596,11 +758,11 @@ class _UploadDishScreenState extends State<UploadDishScreen> {
             color: theme.colorScheme.surfaceVariant,
             borderRadius: BorderRadius.circular(8),
           ),
-          child: DropdownButtonFormField<String>(
+          child: DropdownButtonFormField<_CategoryChoice>(
             value: _selectedCategory,
-            onChanged: (String? newValue) {
+            onChanged: (_CategoryChoice? newValue) {
               setState(() {
-                _selectedCategory = newValue!;
+                _selectedCategory = newValue;
               });
             },
             dropdownColor: theme.colorScheme.surfaceVariant,
@@ -627,10 +789,10 @@ class _UploadDishScreenState extends State<UploadDishScreen> {
             style: theme.textTheme.bodyMedium?.copyWith(
               color: theme.colorScheme.onSurface,
             ),
-            items: _categories.map((String category) {
-              return DropdownMenuItem<String>(
-                value: category,
-                child: Text(category),
+            items: _categories.map((_CategoryChoice c) {
+              return DropdownMenuItem<_CategoryChoice>(
+                value: c,
+                child: Text(c.name),
               );
             }).toList(),
           ),
@@ -639,7 +801,7 @@ class _UploadDishScreenState extends State<UploadDishScreen> {
     );
   }
 
-  Widget _buildBottomButtons(ThemeData theme, bool isDark) {
+  Widget _buildBottomButtons(ThemeData theme, bool isDark, bool canSubmit) {
     return Container(
       decoration: BoxDecoration(
         color: theme.colorScheme.background,
@@ -675,7 +837,7 @@ class _UploadDishScreenState extends State<UploadDishScreen> {
           const SizedBox(width: 16),
           Expanded(
             child: ElevatedButton(
-              onPressed: _isUploading ? null : _uploadDishToCustomerApp,
+              onPressed: canSubmit ? _uploadDishToCustomerApp : null,
               style: ElevatedButton.styleFrom(
                 backgroundColor: theme.colorScheme.primary,
                 foregroundColor: theme.colorScheme.onPrimary,

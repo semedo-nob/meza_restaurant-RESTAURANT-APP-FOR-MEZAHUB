@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:meza_restaurant/providers/theme_provider.dart';
 import 'package:meza_restaurant/providers/user_provider.dart';
+import 'package:meza_restaurant/providers/orders_provider.dart';
 import 'package:provider/provider.dart';
 import 'package:meza_restaurant/pages/homescreen.dart';
 import 'package:meza_restaurant/pages/order_history.dart';
@@ -28,9 +29,13 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   // Initialize Firebase
-  await Firebase.initializeApp(
-    options: DefaultFirebaseOptions.currentPlatform,
-  );
+  try {
+    await Firebase.initializeApp(
+      options: DefaultFirebaseOptions.currentPlatform,
+    );
+  } catch (e) {
+    debugPrint("Firebase initialization failed (unsupported platform?): $e");
+  }
 
   // Initialize Hive
   await Hive.initFlutter();
@@ -102,6 +107,7 @@ class MyApp extends StatelessWidget {
       providers: [
         ChangeNotifierProvider(create: (context) => ThemeProvider()),
         ChangeNotifierProvider(create: (context) => UserProvider()),
+        ChangeNotifierProvider(create: (context) => OrdersProvider()),
       ],
       child: Builder(
         builder: (context) {

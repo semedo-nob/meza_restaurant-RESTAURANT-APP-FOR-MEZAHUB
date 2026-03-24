@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 import '../providers/user_provider.dart';
@@ -17,20 +18,75 @@ class _SignUpScreenState extends State<SignUpScreen> {
   final _restaurantNameController = TextEditingController();
   final _emailController = TextEditingController();
   final _phoneNumberController = TextEditingController();
+  final _addressController = TextEditingController();
   final _passwordController = TextEditingController();
   final _confirmPasswordController = TextEditingController();
 
   bool _obscurePassword = true;
   bool _obscureConfirmPassword = true;
+  double? _latitude;
+  double? _longitude;
+  bool _locationLoading = false;
 
   @override
   void dispose() {
     _restaurantNameController.dispose();
     _emailController.dispose();
     _phoneNumberController.dispose();
+    _addressController.dispose();
     _passwordController.dispose();
     _confirmPasswordController.dispose();
     super.dispose();
+  }
+
+  Future<void> _useCurrentLocation() async {
+    setState(() => _locationLoading = true);
+    try {
+      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Please enable location services.')),
+        );
+        return;
+      }
+      LocationPermission permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+      }
+      if (permission == LocationPermission.denied ||
+          permission == LocationPermission.deniedForever) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Location permission is required for restaurant address.')),
+          );
+        }
+        return;
+      }
+      final position = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.high,
+      );
+      if (mounted) {
+        setState(() {
+          _latitude = position.latitude;
+          _longitude = position.longitude;
+          if (_addressController.text.trim().isEmpty) {
+            _addressController.text =
+                '${position.latitude.toStringAsFixed(5)}, ${position.longitude.toStringAsFixed(5)}';
+          }
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Location captured. Stored for tracking.')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not get location: ${e.toString()}')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _locationLoading = false);
+    }
   }
 
   void _togglePasswordVisibility() {
@@ -55,6 +111,9 @@ class _SignUpScreenState extends State<SignUpScreen> {
       password: _passwordController.text.trim(),
       restaurantName: _restaurantNameController.text.trim(),
       phoneNumber: _phoneNumberController.text.trim(),
+      address: _addressController.text.trim().isEmpty ? null : _addressController.text.trim(),
+      latitude: _latitude,
+      longitude: _longitude,
     );
 
     if (success && mounted) {
@@ -283,6 +342,57 @@ class _SignUpScreenState extends State<SignUpScreen> {
                                   }
                                   return null;
                                 },
+                              ),
+
+                              ResponsiveValue<double>(
+                                mobileValue: 16.0,
+                                tabletValue: 20.0,
+                                desktopValue: 24.0,
+                                builder: (spacing) => SizedBox(height: spacing),
+                              ),
+
+                              // Address (optional) – used for tracking
+                              _buildTextField(
+                                context: context,
+                                label: 'Restaurant address (optional)',
+                                hintText: 'Street, city – or use "Use my location" below',
+                                controller: _addressController,
+                                borderRadius: borderRadius,
+                                contentPadding: contentPadding,
+                                validator: (_) => null,
+                              ),
+
+                              ResponsiveValue<double>(
+                                mobileValue: 12.0,
+                                tabletValue: 16.0,
+                                desktopValue: 20.0,
+                                builder: (spacing) => SizedBox(height: spacing),
+                              ),
+
+                              // Use my current location
+                              SizedBox(
+                                width: double.infinity,
+                                child: OutlinedButton.icon(
+                                  onPressed: _locationLoading ? null : _useCurrentLocation,
+                                  icon: _locationLoading
+                                      ? SizedBox(
+                                          width: 18,
+                                          height: 18,
+                                          child: CircularProgressIndicator(strokeWidth: 2),
+                                        )
+                                      : Icon(Icons.my_location, size: 18, color: AppColors.primary),
+                                  label: Text(
+                                    _locationLoading
+                                        ? 'Getting location...'
+                                        : (_latitude != null
+                                            ? 'Location set (${_latitude!.toStringAsFixed(4)}, ${_longitude!.toStringAsFixed(4)})'
+                                            : 'Use my current location'),
+                                  ),
+                                  style: OutlinedButton.styleFrom(
+                                    foregroundColor: AppColors.primary,
+                                    side: BorderSide(color: AppColors.primary),
+                                  ),
+                                ),
                               ),
 
                               ResponsiveValue<double>(

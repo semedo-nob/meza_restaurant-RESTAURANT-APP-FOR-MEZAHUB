@@ -2,110 +2,80 @@
 import 'package:firebase_auth/firebase_auth.dart' hide User;
 import 'package:hive/hive.dart';
 import '../models/user_model.dart';
+import 'backend_api.dart';
 
 class AuthService {
-  final FirebaseAuth _auth = FirebaseAuth.instance;
+  FirebaseAuth get _auth => FirebaseAuth.instance;
   final Box _authBox = Hive.box('auth');
   final Box _userBox = Hive.box('user');
 
-  // Login with email and password using Firebase
+  // Login with email and password using backend (JWT)
   Future<Map<String, dynamic>> loginWithEmailAndPassword(
       String email, String password) async {
     try {
-      final UserCredential userCredential = await _auth.signInWithEmailAndPassword(
-        email: email,
-        password: password,
-      );
-
-      if (userCredential.user != null) {
-        final firebaseUser = userCredential.user!;
-        final user = User(
-          id: firebaseUser.uid,
-          email: firebaseUser.email ?? email,
-          restaurantName: firebaseUser.displayName ?? 'My Restaurant',
-          phoneNumber: firebaseUser.phoneNumber ?? '',
-          role: 'restaurant_owner',
-          createdAt: DateTime.now(),
-        );
-
-        // Store user data in Hive
-        await _storeUser(user);
-
-        return {
-          'success': true,
-          'user': user.toJson(),
-        };
-      } else {
-        return {
-          'success': false,
-          'error': 'Login failed: No user data returned',
-        };
+      final data = await BackendApi.login(email, password);
+      final userMap = data['user'];
+      if (userMap == null) {
+        final profile = await BackendApi.getProfile();
+        await _storeUserFromMap(profile);
+        return {'success': true, 'user': profile};
       }
-    } on FirebaseAuthException catch (e) {
-      return {
-        'success': false,
-        'error': _getFirebaseAuthErrorMessage(e),
-      };
+      await _storeUserFromMap(Map<String, dynamic>.from(userMap as Map));
+      return {'success': true, 'user': userMap};
     } catch (e) {
-      return {
-        'success': false,
-        'error': 'Login failed: $e',
-      };
+      return {'success': false, 'error': e.toString().replaceFirst('Exception: ', '')};
     }
   }
 
-  // Register new user with Firebase
+  // Register new user with backend (role: restaurant)
   Future<Map<String, dynamic>> registerWithEmailAndPassword({
     required String email,
     required String password,
     required String restaurantName,
     required String phoneNumber,
+    String? address,
+    double? latitude,
+    double? longitude,
   }) async {
     try {
-      final UserCredential userCredential = await _auth.createUserWithEmailAndPassword(
+      final data = await BackendApi.register(
+        name: restaurantName,
         email: email,
         password: password,
+        role: 'restaurant',
+        phone: phoneNumber,
       );
-
-      if (userCredential.user != null) {
-        final firebaseUser = userCredential.user!;
-
-        // Update display name with restaurant name
-        await firebaseUser.updateDisplayName(restaurantName);
-
-        final user = User(
-          id: firebaseUser.uid,
-          email: firebaseUser.email ?? email,
-          restaurantName: restaurantName,
-          phoneNumber: phoneNumber,
-          role: 'restaurant_owner',
-          createdAt: DateTime.now(),
-        );
-
-        // Store user data in Hive
-        await _storeUser(user);
-
-        return {
-          'success': true,
-          'user': user.toJson(),
-        };
+      final userMap = data['user'];
+      if (userMap == null) {
+        final profile = await BackendApi.getProfile();
+        await _storeUserFromMap(profile);
       } else {
-        return {
-          'success': false,
-          'error': 'Registration failed: No user data returned',
-        };
+        await _storeUserFromMap(Map<String, dynamic>.from(userMap as Map));
       }
-    } on FirebaseAuthException catch (e) {
-      return {
-        'success': false,
-        'error': _getFirebaseAuthErrorMessage(e),
-      };
+      // Create the restaurant in the backend (details + location from sign-up form).
+      try {
+        final myRestaurants = await BackendApi.getMyRestaurants();
+        if (myRestaurants.isEmpty) {
+          await BackendApi.createRestaurant(
+            name: restaurantName,
+            phone: phoneNumber,
+            address: address,
+            latitude: latitude,
+            longitude: longitude,
+          );
+        }
+      } catch (_) {
+        // Non-fatal: user is registered; they can create restaurant later from profile if needed.
+      }
+      return {'success': true, 'user': userMap ?? (await BackendApi.getProfile())};
     } catch (e) {
-      return {
-        'success': false,
-        'error': 'Registration failed: $e',
-      };
+      return {'success': false, 'error': e.toString().replaceFirst('Exception: ', '')};
     }
+  }
+
+  Future<void> _storeUserFromMap(Map<String, dynamic> m) async {
+    final user = User.fromJson(m);
+    await _userBox.put('currentUser', user.toJson());
   }
 
   // Password reset with Firebase
@@ -129,109 +99,55 @@ class AuthService {
     }
   }
 
-  // Verify user authentication status
+  // Verify user authentication status (backend JWT in Hive)
   Future<Map<String, dynamic>> verifyAuthStatus() async {
     try {
-      final firebaseUser = _auth.currentUser;
-      if (firebaseUser != null) {
-        // Check if user data exists in Hive
-        final storedUser = _userBox.get('currentUser');
-        User user;
-
-        if (storedUser != null) {
-          user = User.fromJson(Map<String, dynamic>.from(storedUser));
-        } else {
-          // Create user from Firebase auth if not in Hive
-          user = User(
-            id: firebaseUser.uid,
-            email: firebaseUser.email ?? '',
-            restaurantName: firebaseUser.displayName ?? 'My Restaurant',
-            phoneNumber: firebaseUser.phoneNumber ?? '',
-            role: 'restaurant_owner',
-            createdAt: DateTime.now(),
-          );
-          await _storeUser(user);
-        }
-
-        return {
-          'success': true,
-          'user': user.toJson(),
-          'isAuthenticated': true,
-        };
-      } else {
-        return {
-          'success': true,
-          'user': null,
-          'isAuthenticated': false,
-        };
+      final token = _authBox.get('access_token') as String?;
+      if (token == null || token.isEmpty) {
+        return {'success': true, 'user': null, 'isAuthenticated': false};
+      }
+      var storedUser = _userBox.get('currentUser');
+      if (storedUser != null) {
+        final user = User.fromJson(Map<String, dynamic>.from(storedUser));
+        return {'success': true, 'user': user.toJson(), 'isAuthenticated': true};
+      }
+      try {
+        final profile = await BackendApi.getProfile();
+        await _storeUserFromMap(profile);
+        return {'success': true, 'user': profile, 'isAuthenticated': true};
+      } catch (_) {
+        await _clearStorage();
+        return {'success': true, 'user': null, 'isAuthenticated': false};
       }
     } catch (e) {
-      return {
-        'success': false,
-        'error': 'Auth verification failed: $e',
-      };
+      return {'success': false, 'error': 'Auth verification failed: $e'};
     }
   }
 
-  // Logout
+  // Logout (clear backend JWT and user from Hive; optionally Firebase)
   Future<Map<String, dynamic>> logout() async {
     try {
       await _auth.signOut();
       await _clearStorage();
-
-      return {
-        'success': true,
-        'message': 'Logged out successfully',
-      };
+      return {'success': true, 'message': 'Logged out successfully'};
     } catch (e) {
-      return {
-        'success': false,
-        'error': 'Logout failed: $e',
-      };
+      return {'success': false, 'error': 'Logout failed: $e'};
     }
   }
 
-  // Update user profile
+  // Update user profile via backend
   Future<Map<String, dynamic>> updateProfile({
     required String userId,
     String? restaurantName,
     String? phoneNumber,
   }) async {
     try {
-      final currentUser = _auth.currentUser;
-      if (currentUser != null && restaurantName != null) {
-        await currentUser.updateDisplayName(restaurantName);
-      }
-
-      // Get current user data
-      final storedUser = _userBox.get('currentUser');
-      if (storedUser != null) {
-        final user = User.fromJson(Map<String, dynamic>.from(storedUser));
-        final updatedUser = user.copyWith(
-          restaurantName: restaurantName ?? user.restaurantName,
-          phoneNumber: phoneNumber ?? user.phoneNumber,
-          updatedAt: DateTime.now(),
-        );
-
-        // Update stored user data in Hive
-        await _storeUser(updatedUser);
-
-        return {
-          'success': true,
-          'user': updatedUser.toJson(),
-          'message': 'Profile updated successfully',
-        };
-      }
-
-      return {
-        'success': false,
-        'error': 'User not found',
-      };
+      await BackendApi.updateProfile(name: restaurantName, phone: phoneNumber);
+      final profile = await BackendApi.getProfile();
+      await _storeUserFromMap(profile);
+      return {'success': true, 'user': profile, 'message': 'Profile updated successfully'};
     } catch (e) {
-      return {
-        'success': false,
-        'error': 'Profile update failed: $e',
-      };
+      return {'success': false, 'error': e.toString().replaceFirst('Exception: ', '')};
     }
   }
 
@@ -336,7 +252,6 @@ class AuthService {
     }
   }
 
-  // Hive storage methods
   Future<void> _storeUser(User user) async {
     await _userBox.put('currentUser', user.toJson());
   }
